@@ -2,8 +2,11 @@ use clap::{Parser, ValueEnum};
 use memcache::MemcacheError;
 use rand::distributions::{Alphanumeric, DistString};
 use rand::Rng;
+use rayon::prelude::*;
 
 use std::{collections::HashMap, sync::Arc};
+
+const NUM_ENTRIES: usize = 10000;
 
 #[derive(ValueEnum, Copy, Clone, Debug, PartialEq, Eq)]
 enum Protocol {
@@ -32,8 +35,12 @@ struct Cli {
     #[arg(short, long, default_value = "100000")]
     nums: usize,
 
+    // number of threads to run
+    #[arg(short, long, default_value = "4")]
+    threads: usize,
+
     /// udp or tcp protocol for memcached
-    #[arg(short = 't', long,default_value_t = Protocol::Udp , value_enum)]
+    #[arg(short = 'l', long, default_value_t = Protocol::Udp , value_enum)]
     protocol: Protocol,
 }
 
@@ -98,26 +105,32 @@ fn exmaple_method(server: &memcache::Client) -> std::result::Result<(), Memcache
     let answer: i32 = server.get("counter")?.unwrap();
     assert_eq!(answer, 42);
 
+    // stats
+    let stats = server.stats()?;
+    println!("stats: {:?}", stats);
+
     println!("memcached server works!");
     Ok(())
 }
 
 // TODO add mutiple thread support
-async fn get_command_benchmark(
-    server: &memcache::Client,
+fn get_command_benchmark(
+    server: memcache::Client,
     test_dict: Arc<HashMap<String, String>>,
     nums: usize,
-) -> std::result::Result<(), MemcacheError> {
-    let start = std::time::Instant::now();
+) -> Result<(), MemcacheError> {
     let keys: Vec<&String> = test_dict.keys().collect();
+
+    let start = std::time::Instant::now();
     let dict_len = keys.len();
 
     for _ in 0..nums {
-        let rng = rand::thread_rng().gen_range(0..dict_len);
-        let key = keys[rng].clone();
-        if let Some(value) = test_dict.get(&key) {
-            let return_value = server.get::<String>(&key).unwrap();
-            assert_eq!(return_value, Some(value.to_string()));
+        let rng = rand::thread_rng().gen_range(0..dict_len - 1);
+        let key = keys[rng];
+        if let Some(value) = test_dict.get(key) {
+            let value = value.clone();
+            let return_value = server.get::<String>(key)?;
+            assert_eq!(return_value, Some(value));
         }
     }
 
@@ -127,34 +140,51 @@ async fn get_command_benchmark(
     Ok(())
 }
 
+fn get_server(
+    addr: &String,
+    port: &String,
+    protocol: &Protocol,
+) -> Result<memcache::Client, MemcacheError> {
+    match protocol {
+        Protocol::Udp => memcache::connect(format!(
+            "memcache+udp://{}:{}?connect_timeout=20",
+            addr, port
+        )),
+        Protocol::Tcp => {
+            memcache::connect(format!("memcache://{}:{}?connect_timeout=20", addr, port))
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> std::result::Result<(), MemcacheError> {
     let args = Cli::parse();
 
-    let server = match args.protocol {
-        Protocol::Udp => memcache::connect(format!(
-            "memcache+udp://{}:{}?connect_timeout=1",
-            args.server_address, args.port
-        )),
-        Protocol::Tcp => memcache::connect(format!(
-            "memcache://{}:{}?connect_timeout=1",
-            args.server_address, args.port
-        )),
-    }?;
-
+    let server = get_server(&args.server_address, &args.port, &args.protocol)?;
     exmaple_method(&server)?;
 
-    let test_dict = generate_memcached_test_dict(args.key_size, args.value_size, args.nums);
+    let test_dict = generate_memcached_test_dict(args.key_size, args.value_size, NUM_ENTRIES);
 
     let test_dict = Arc::new(test_dict);
 
     // assign test_dict to server
     set_memcached_value(&server, test_dict.clone())?;
 
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(args.threads)
+        .build_global()
+        .unwrap();
+
     // get command benchmark
-    get_command_benchmark(&server, test_dict.clone(), args.nums).await?;
-    get_command_benchmark(&server, test_dict.clone(), args.nums).await?;
+    // use rayon to run multiple thread
+    (0..args.threads).into_par_iter().for_each(|_| {
+        let test_dict = Arc::clone(&test_dict);
+        let server = get_server(&args.server_address, &args.port, &args.protocol).unwrap();
+        get_command_benchmark(server, test_dict, args.nums).unwrap();
+    });
+    // stats
+    let stats = server.stats()?;
+    println!("stats: {:?}", stats);
 
     Ok(())
 }
-
