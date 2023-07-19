@@ -35,6 +35,10 @@ struct Cli {
     #[arg(short, long, default_value = "8")]
     value_size: usize,
 
+    /// verify the value after get command
+    #[arg(short = 'd', long, default_value = "false")]
+    validate: bool,
+
     /// number of test entries to generate
     #[arg(short, long, default_value = "100000")]
     nums: usize,
@@ -123,75 +127,51 @@ async fn wrap_get_command(key: String, seq: u16) -> Vec<u8> {
     seq_bytes
 }
 
-async fn get_key(
+struct TaskData {
+    buf: Vec<u8>,
+    addr: String,
     key: String,
-    socket: Arc<UdpSocket>,
-    seq: u16,
-    addr: &String,
-) -> Result<(), Box<dyn Error>> {
-    let buf = wrap_get_command(key, seq).await;
-    socket.send_to(&buf[..], addr).await?;
-
-    let mut buf = [0; BUFFER_SIZE];
-    match socket.recv_from(&mut buf).await {
-        Ok((len, _)) => {
-            let buf = &buf[..len];
-            let _ = String::from_utf8_lossy(buf);
-            // println!("get key: {}", buf);
-        }
-        Err(e) => {
-            println!("get key error: {}", e);
-        }
-    }
-
-    Ok(())
+    test_dict: Arc<HashMap<String, String>>,
+    validate: bool,
+    key_size: usize,
+    value_size: usize,
 }
 
-async fn socket_task(socket: Arc<UdpSocket>, mut rx: mpsc::Receiver<(Vec<u8>, String)>) {
-    while let Some((buf, addr)) = rx.recv().await {
+async fn socket_task(socket: Arc<UdpSocket>, mut rx: mpsc::Receiver<TaskData>) {
+    while let Some(TaskData {
+        buf,
+        addr,
+        key,
+        test_dict,
+        validate,
+        key_size,
+        value_size,
+    }) = rx.recv().await
+    {
         // Send
         let _ = socket.send_to(&buf[..], &addr).await;
 
         // Then receive
         let mut buf = [0; BUFFER_SIZE];
         if let Ok((amt, _)) = socket.recv_from(&mut buf).await {
-            let buf = &buf[..amt];
-            let buf = String::from_utf8_lossy(buf);
-            // println!("Received: {}", buf);
+            if validate {
+                if let Some(value) = test_dict.get(&key) {
+                    let received = String::from_utf8_lossy(&buf[..amt])
+                        .split("VALUE ")
+                        .nth(1)
+                        .unwrap_or_default()[6 + key_size..6 + key_size + value_size]
+                        .to_string();
+
+                    if received != value.as_str() {
+                        println!(
+                            "response not match key {} buf: {}, value: {}",
+                            key, received, value
+                        );
+                    }
+                }
+            }
         }
     }
-}
-
-async fn get_command_benchmark_verify(
-    test_dict: Arc<HashMap<String, String>>,
-    nums: usize,
-) -> Result<(), Box<dyn Error>> {
-    let args = Cli::parse();
-    let keys: Vec<&String> = test_dict.keys().collect();
-
-    // assign client address
-    let addr = Arc::new(format!("{}:{}", args.server_address, args.port));
-    let socket = UdpSocket::bind("0.0.0.0:0").await?;
-    let socket = Arc::new(socket);
-
-    let start = std::time::Instant::now();
-    let dict_len = keys.len();
-
-    let mut seq: u16 = 0;
-
-    for _ in 0..nums {
-        let rng = rand::thread_rng().gen_range(0..dict_len - 1);
-        let key = keys[rng].clone();
-        let socket_clone = Arc::clone(&socket);
-        let addr_clone = Arc::new(&addr);
-        seq = seq.wrapping_add(1);
-        get_key(key, socket_clone, seq, &addr_clone).await?;
-    }
-
-    let duration = start.elapsed();
-    println!("Time elapsed in get_command_benchmark() is: {:?}", duration);
-
-    Ok(())
 }
 
 // TODO add mutiple thread support
@@ -221,10 +201,20 @@ async fn get_command_benchmark(
         let rng = rand::thread_rng().gen_range(0..dict_len - 1);
         let key = keys[rng].clone();
         // let addr_clone = Arc::clone(&addr);
-        let packet = wrap_get_command(key, seq).await;
+        let packet = wrap_get_command(key.clone(), seq).await;
         seq = seq.wrapping_add(1);
 
-        let send_result = tx.send((packet, addr.clone())).await;
+        let send_result = tx
+            .send(TaskData {
+                buf: packet,
+                addr: addr.clone(),
+                key,
+                test_dict: test_dict.clone(),
+                validate: args.validate,
+                key_size: args.key_size,
+                value_size: args.value_size,
+            })
+            .await;
         if send_result.is_err() {
             // The receiver was dropped, break the loop
             break;
