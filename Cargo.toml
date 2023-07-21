@@ -9,7 +9,6 @@ authors = ["Ruowen Qin ruowenq2@illinois.edu"]
 memcache = "0.17.0"
 rand = "0.8.5"
 clap = { version = "4.3.11", features = ["derive"] }
-rayon = { version = "1.7.0" }
 tokio = { version = "1.29.1", features = ["full"] }
 
 [patch.crates-io]

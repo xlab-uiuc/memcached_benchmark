@@ -193,7 +193,7 @@ async fn get_command_benchmark(
     let mut seq: u16 = 0;
 
     // Create the channel
-    let (tx, rx) = mpsc::channel(1000);
+    let (tx, rx) = mpsc::channel(100000);
     let socket_clone = Arc::clone(&socket);
     let socket_task = tokio::spawn(socket_task(socket_clone, rx));
 
@@ -260,11 +260,6 @@ async fn main() -> std::result::Result<(), Box<dyn Error>> {
 
     // assign test_dict to server
     set_memcached_value(&server, test_dict.clone())?;
-
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(args.threads)
-        .build_global()
-        .unwrap();
 
     let mut handles = vec![];
 
