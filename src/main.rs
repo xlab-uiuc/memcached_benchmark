@@ -6,6 +6,7 @@ use std::error::Error;
 use std::vec;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
+use tokio::time::timeout;
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -153,18 +154,21 @@ async fn socket_task(socket: Arc<UdpSocket>, mut rx: mpsc::Receiver<TaskData>) {
 
         // Then receive
         let mut buf = [0; BUFFER_SIZE];
-        if let Ok((amt, _)) = socket.recv_from(&mut buf).await {
+        let my_duration = tokio::time::Duration::from_millis(500);
+
+        // timeout(my_duration, socket.recv_from(&mut buf)).await
+        if let Ok(Ok((amt, _))) = timeout(my_duration, socket.recv_from(&mut buf)).await {
             if validate {
                 if let Some(value) = test_dict.get(&key) {
                     let received = String::from_utf8_lossy(&buf[..amt])
                         .split("VALUE ")
                         .nth(1)
-                        .unwrap_or_default()[6 + key_size..6 + key_size + value_size]
+                        .unwrap_or_default()[6 + key_size + 1..6 + key_size + value_size + 1]
                         .to_string();
 
-                    if received != value.as_str() {
+                    if received != *value.to_string() {
                         println!(
-                            "response not match key {} buf: {}, value: {}",
+                            "response not match key {} buf: {} , value: {}",
                             key, received, value
                         );
                     }
@@ -240,10 +244,7 @@ fn get_server(
 ) -> Result<memcache::Client, MemcacheError> {
     match protocol {
         Protocol::Udp => memcache::connect(format!("memcache+udp://{}:{}?timeout=10", addr, port)),
-        Protocol::Tcp => memcache::connect(format!(
-            "memcache://{}:{}?protocol=ascii&timeout=10",
-            addr, port
-        )),
+        Protocol::Tcp => memcache::connect(format!("memcache://{}:{}?timeout=10", addr, port)),
     }
 }
 
