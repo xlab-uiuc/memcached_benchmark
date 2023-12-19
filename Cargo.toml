@@ -6,10 +6,7 @@ authors = ["Ruowen Qin ruowenq2@illinois.edu"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-memcache = "0.17.0"
+memcache = "0.17.1"
 rand = "0.8.5"
-clap = { version = "4.3.11", features = ["derive"] }
-tokio = { version = "1.29.1", features = ["full"] }
-
-[patch.crates-io]
-memcache = { git = 'https://github.com/chinrw/rust-memcache.git' }
+clap = { version = "4.4.11", features = ["derive"] }
+tokio = { version = "1.35.1", features = ["full"] }
