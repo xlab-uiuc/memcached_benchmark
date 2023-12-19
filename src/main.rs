@@ -29,11 +29,11 @@ struct Cli {
     port: String,
 
     /// key size to generate random memcached key
-    #[arg(short, long, default_value = "12")]
+    #[arg(short, long, default_value = "16")]
     key_size: usize,
 
     /// value size to generate random memcached value
-    #[arg(short, long, default_value = "12")]
+    #[arg(short, long, default_value = "32")]
     value_size: usize,
 
     /// verify the value after get command
